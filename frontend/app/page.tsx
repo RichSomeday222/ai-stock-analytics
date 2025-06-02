@@ -1,20 +1,24 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+
+interface SearchSuggestion {
+  symbol: string
+  name: string
+  exchange: string
+  type: string
+}
 
 export default function HomePage() {
   const [searchTerm, setSearchTerm] = useState('')
+  const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
   const router = useRouter()
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault()
-    
-    if (!searchTerm.trim()) return
-    
-    const ticker = searchTerm.trim().toUpperCase()
-    router.push(`/company/${ticker}`)
-  }
+  const searchRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const popularStocks = [
     { symbol: 'AAPL', name: 'Apple Inc.' },
@@ -24,6 +28,105 @@ export default function HomePage() {
     { symbol: 'AMZN', name: 'Amazon.com Inc.' },
     { symbol: 'META', name: 'Meta Platforms Inc.' },
   ]
+
+  // 防抖获取搜索建议
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (searchTerm.length >= 1) {
+        fetchSuggestions(searchTerm)
+      } else {
+        setSuggestions([])
+        setShowSuggestions(false)
+      }
+    }, 300) // 300ms防抖
+
+    return () => clearTimeout(timeoutId)
+  }, [searchTerm])
+
+  // 点击外部关闭建议
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false)
+        setSelectedIndex(-1)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const fetchSuggestions = async (query: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/stocks/suggestions/${encodeURIComponent(query)}`)
+      if (response.ok) {
+        const data = await response.json()
+        setSuggestions(data.suggestions || [])
+        setShowSuggestions(true)
+        setSelectedIndex(-1)
+      }
+    } catch (error) {
+      console.error('Failed to fetch suggestions:', error)
+      setSuggestions([])
+    }
+  }
+
+  const handleSearchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    if (!searchTerm.trim()) return
+    
+    setIsLoading(true)
+    const ticker = searchTerm.trim().toUpperCase()
+    
+    if (selectedIndex >= 0 && suggestions[selectedIndex]) {
+      router.push(`/company/${suggestions[selectedIndex].symbol}`)
+    } else {
+      router.push(`/company/${ticker}`)
+    }
+    
+    setShowSuggestions(false)
+  }
+
+  const handleSuggestionClick = (suggestion: SearchSuggestion) => {
+    setSearchTerm(suggestion.symbol)
+    setShowSuggestions(false)
+    router.push(`/company/${suggestion.symbol}`)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions || suggestions.length === 0) return
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setSelectedIndex(prev => prev < suggestions.length - 1 ? prev + 1 : 0)
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setSelectedIndex(prev => prev > 0 ? prev - 1 : suggestions.length - 1)
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (selectedIndex >= 0) {
+          handleSuggestionClick(suggestions[selectedIndex])
+        } else {
+          handleSearchSubmit(e)
+        }
+        break
+      case 'Escape':
+        setShowSuggestions(false)
+        setSelectedIndex(-1)
+        inputRef.current?.blur()
+        break
+    }
+  }
+
+  const handleInputFocus = () => {
+    if (suggestions.length > 0) {
+      setShowSuggestions(true)
+    }
+  }
 
   return (
     <div style={{
@@ -102,54 +205,126 @@ export default function HomePage() {
               to make informed investment decisions.
             </p>
 
-            {/* Search Bar */}
-            <form onSubmit={handleSearch} style={{ maxWidth: '600px', margin: '0 auto 4rem auto' }}>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search stocks (e.g., AAPL, TSLA, META)"
-                  style={{
-                    width: '100%',
-                    padding: '1.5rem 1rem 1.5rem 3rem',
-                    fontSize: '1.125rem',
-                    background: 'rgba(31, 41, 55, 0.8)',
-                    border: '1px solid #374151',
-                    borderRadius: '16px',
-                    color: 'white',
-                    outline: 'none'
-                  }}
-                />
-                <span style={{
-                  position: 'absolute',
-                  left: '1rem',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: '#9ca3af'
-                }}>
-                  🔍
-                </span>
-                <button
-                  type="submit"
-                  style={{
+            {/* Enhanced Search Bar with Suggestions */}
+            <div ref={searchRef} style={{ maxWidth: '600px', margin: '0 auto 4rem auto', position: 'relative' }}>
+              <form onSubmit={handleSearchSubmit}>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onFocus={handleInputFocus}
+                    placeholder="Search stocks (e.g., AAPL, Tesla, Microsoft)"
+                    style={{
+                      width: '100%',
+                      padding: '1.5rem 1rem 1.5rem 3rem',
+                      fontSize: '1.125rem',
+                      background: 'rgba(31, 41, 55, 0.8)',
+                      border: showSuggestions ? '2px solid #10b981' : '1px solid #374151',
+                      borderRadius: suggestions.length > 0 && showSuggestions ? '16px 16px 0 0' : '16px',
+                      color: 'white',
+                      outline: 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                  />
+                  <span style={{
                     position: 'absolute',
-                    right: '8px',
-                    top: '8px',
-                    bottom: '8px',
-                    padding: '0 2rem',
-                    background: 'linear-gradient(135deg, #10b981, #3b82f6)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '12px',
-                    fontWeight: '600',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Search
-                </button>
-              </div>
-            </form>
+                    left: '1rem',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: '#9ca3af'
+                  }}>
+                    🔍
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    style={{
+                      position: 'absolute',
+                      right: '8px',
+                      top: '8px',
+                      bottom: '8px',
+                      padding: '0 2rem',
+                      background: 'linear-gradient(135deg, #10b981, #3b82f6)',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '12px',
+                      fontWeight: '600',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {isLoading ? 'Searching...' : 'Search'}
+                  </button>
+                </div>
+              </form>
+
+              {/* Search Suggestions Dropdown */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  background: 'rgba(31, 41, 55, 0.95)',
+                  backdropFilter: 'blur(10px)',
+                  border: '2px solid #10b981',
+                  borderTop: 'none',
+                  borderRadius: '0 0 16px 16px',
+                  maxHeight: '300px',
+                  overflowY: 'auto',
+                  zIndex: 50,
+                  boxShadow: '0 10px 25px rgba(0, 0, 0, 0.3)'
+                }}>
+                  {suggestions.map((suggestion, index) => (
+                    <div
+                      key={`${suggestion.symbol}-${index}`}
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      style={{
+                        padding: '1rem 1.5rem',
+                        cursor: 'pointer',
+                        borderBottom: index < suggestions.length - 1 ? '1px solid #374151' : 'none',
+                        background: selectedIndex === index ? 'rgba(16, 185, 129, 0.1)' : 'transparent',
+                        transition: 'background-color 0.2s ease'
+                      }}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <div style={{ 
+                            fontWeight: 'bold', 
+                            fontSize: '1rem',
+                            color: selectedIndex === index ? '#10b981' : 'white'
+                          }}>
+                            {suggestion.symbol}
+                          </div>
+                          <div style={{ 
+                            fontSize: '0.875rem', 
+                            color: '#9ca3af', 
+                            marginTop: '0.25rem',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {suggestion.name}
+                          </div>
+                        </div>
+                        <div style={{
+                          fontSize: '0.75rem',
+                          color: '#6b7280',
+                          padding: '0.25rem 0.5rem',
+                          background: 'rgba(55, 65, 81, 0.5)',
+                          borderRadius: '4px'
+                        }}>
+                          {suggestion.exchange}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Popular Stocks */}
             <div style={{ maxWidth: '900px', margin: '0 auto' }}>
@@ -241,10 +416,10 @@ export default function HomePage() {
                 📈
               </div>
               <h3 style={{ fontSize: '1.5rem', fontWeight: 'bold', marginBottom: '1rem' }}>
-                Advanced Analytics
+                Smart Search
               </h3>
               <p style={{ color: '#9ca3af' }}>
-                Comprehensive financial analysis and technical indicators
+                Intelligent search with real-time suggestions and auto-complete
               </p>
             </div>
             
